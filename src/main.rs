@@ -3,7 +3,7 @@ use chrono::Local;
 use std::thread::sleep;
 use std::fs::File;
 use std::io::{self, Write};
-use serialport::SerialPortType;
+use serialport::{SerialPort, SerialPortType};
 use crossterm::style::Print;
 use crossterm::{cursor, queue};
 use crossterm::terminal::{enable_raw_mode, Clear, ClearType};
@@ -110,7 +110,7 @@ fn main() {
                     }
                 }
                 
-                process_commands(&mut command_buf, &mut recording, &mut file);
+                process_commands(&mut command_buf, &mut recording, &mut file, port.as_mut());
                 draw_commands_field(&mut command_buf);
             }
         }
@@ -122,7 +122,7 @@ fn main() {
 }
 
 
-fn process_commands(command: &mut String, recording: &mut bool, file: &mut File) -> () {
+fn process_commands(command: &mut String, recording: &mut bool, file: &mut File, port: &mut dyn SerialPort) -> () {
     if poll(Duration::from_millis(1)).unwrap(){
         // It's guaranteed that `read` won't block, because `poll` returned
         // `Ok(true)`
@@ -137,26 +137,26 @@ fn process_commands(command: &mut String, recording: &mut bool, file: &mut File)
                 if code == KeyCode::Enter {
                     if command.trim() == "start".to_string() {
                         if !*recording {
-
+                            println!("Creating file\n\rStarting to record\n\rTo end the recording session, please use the \"stop\" command \n\r");
                             let file_name = format!("Session {} .csv", Local::now().format("%d-%m-%Y %H-%M-%S"));
                             *file = File::create(file_name).unwrap();
                             file.write_all(b"Time,MQ3,MQ5,MQ131,MQ135,MP503,Temperature,Humidity\n").unwrap();
 
                             *recording = true;
                         } else {
-                            println!("A recording session is already in progress. Please enter the \"stop\" command to ");
-                            println!("end it before attempting to start another one");
+                            println!("A recording session is already in progress. Please enter the \"stop\" command to end it before attempting\r");
+                            println!("to start another one\r");
                         }
                     }
                     else if command.trim() == "stop".to_string() {
                         if *recording {
+                            println!("Ending the recording session\n\r");
                             *recording = false;
                         } else {
-                            println!("There is no recording session in progress");
+                            println!("There is no recording session in progress\r");
                         }
-                    }
-                    else if command.trim().starts_with("start after") {
-
+                    } else {
+                        port.write(command.as_bytes()).expect("Write failed!");
                     }
                     command.clear();  
                 }
@@ -180,7 +180,7 @@ fn draw_commands_field(command: &mut String) {
     queue!(io::stdout(), Print(command)).unwrap();
     queue!(io::stdout(), cursor::MoveTo(0, 1)).unwrap();
     queue!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
-    queue!(io::stdout(), Print("=======================================================================================")).unwrap();
+    queue!(io::stdout(), Print("=========================================================================================================")).unwrap();
     queue!(io::stdout(), cursor::RestorePosition).unwrap();
     io::stdout().flush().unwrap();
 }
