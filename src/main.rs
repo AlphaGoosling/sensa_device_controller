@@ -15,7 +15,7 @@ fn main() {
     io::stdout().flush().unwrap();
     enable_raw_mode().unwrap();
     println!("\n\n\r");
-    println!("******************** SENSA Device Controller ***************************\r");
+    println!("******************** SENSA Device Companion Program ***************************\r");
     println!("\r");
     let mut command_buf = String::new();
     // For enabling and disabling data recording from the device

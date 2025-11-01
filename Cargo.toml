@@ -1,5 +1,5 @@
 [package]
-name = "sensa_device_controller"
+name = "sensa_device_companion_program"
 version = "0.1.0"
 edition = "2024"
 
