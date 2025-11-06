@@ -1,12 +1,13 @@
 use core::time::Duration;
 use chrono::Local;
+use crossterm::event::KeyEventKind;
 use std::thread::sleep;
 use std::fs::File;
 use std::io::{self, Write};
 use serialport::{SerialPort, SerialPortType};
 use crossterm::style::Print;
 use crossterm::{cursor, queue};
-use crossterm::terminal::{enable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{enable_raw_mode, Clear, ClearType, size};
 use crossterm::event::{read, Event::Key, KeyCode, KeyEvent, poll};
 
 fn main() {
@@ -15,7 +16,7 @@ fn main() {
     io::stdout().flush().unwrap();
     enable_raw_mode().unwrap();
     println!("\n\n\r");
-    println!("******************** SENSA Device Companion Program ***************************\r");
+    draw_wide_features(" SENSA Device Companion Program ".to_string(), "*".to_string());
     println!("\r");
     let mut command_buf = String::new();
     // For enabling and disabling data recording from the device
@@ -34,7 +35,8 @@ fn main() {
         for port in &ports {
             match &port.port_type {
                 SerialPortType::UsbPort(device_info) =>  {
-                    if device_info.product != Some(String::from("CP2102 USB to UART Bridge Controller")) {continue;}
+                    // device_info.product is different between linux and windows for some reason so using manufacturer instead
+                    if device_info.manufacturer != Some(String::from("Silicon Labs")) {continue;}
                     port_name = port.port_name.clone();
                     println!("SENSA device found on port {}\r", port_name); 
                     break 'outer;
@@ -43,6 +45,7 @@ fn main() {
             }
         }
         println!("Device not found\r");
+        draw_commands_field(&mut command_buf);
         // If device is not connected by the time the program is started then "Device not found"
         // will be output every 2 seconds until the device is connected
         // to do: change functionality here such that no device foun
@@ -59,7 +62,7 @@ fn main() {
             println!("Connected to SENSA device\r");
             // Buffer for serial data after reading it from the port
             let mut serial_buf: Vec<u8> = vec![0; 1000];
-            // Buffer for accumulating 
+            // Buffer for accumulating and extracting data after copying it from serial_buf
             let mut received_data = Vec::new();
             println!("Receiving data on port {} at {} baud:\r", &port_name, &baud_rate);
             println!("Please enter command \"start\" to start recording the sensor data to a file\r");
@@ -68,14 +71,16 @@ fn main() {
                 match port.read(serial_buf.as_mut_slice()) {
                     Ok(t) => {
                         io::stdout().write_all(&serial_buf[..t]).unwrap();
-                        io::stdout().flush().unwrap();
+                        // Using unwrap_or to deal with the error cause by non UTF8 characters as a result of data corruption during transfer 
+                        io::stdout().flush().unwrap_or(());
+                        // Redraw the command field because it has been shifted off the screen
                         draw_commands_field(&mut command_buf);
 
                         received_data.extend_from_slice(&serial_buf[..t]);
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::TimedOut => (),
                     Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                        eprintln!("Device disconnected"); 
+                        eprintln!("Error: Device disconnected\r"); 
                         std::process::exit(1);
                     },
                     Err(e) => {
@@ -83,11 +88,13 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-
+                // A sensor data string is led by a `-` and terminated by a `_`
                 if received_data.contains(&b'-') && received_data.contains(&b'_'){
                     let start = received_data.iter().position(|&x| x == b'-').unwrap();
                     let end = received_data.iter().position(|&x| x == b'_').unwrap();
-                    if start > end {
+                    // After a sensor data extract is spliced off in the previous iteration, the next data may not necessarily 
+                    //be a sensor data string, it may be other device output. It needs to be cut off till the sensor data start  
+                    if start != 0 {
                         let _ = received_data.splice(..start, []);
                     }
                     else {
@@ -111,7 +118,6 @@ fn main() {
                             file.flush().unwrap();
                         }
                     }
-                    
                 }
                 
                 process_commands(&mut command_buf, &mut recording, &mut file, port.as_mut());
@@ -119,7 +125,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("Failed to open \"{}\". Error: {}", port_name, e);
+            eprintln!("Failed to open \"{}\". Error: {}\r", port_name, e);
             std::process::exit(1);
         }
     }
@@ -127,10 +133,13 @@ fn main() {
 
 
 fn process_commands(command: &mut String, recording: &mut bool, file: &mut File, port: &mut dyn SerialPort) -> () {
-    if poll(Duration::from_millis(1)).unwrap(){
+    if poll(Duration::from_millis(0)).unwrap(){
         // It's guaranteed that `read` won't block, because to reach this point `poll` had to have returned Ok(true)
         let event = read().unwrap();
-        if let Key(KeyEvent {code,..}) = event {
+        if let Key(KeyEvent {code, kind, ..}) = event {
+            // do not do anything if the event is a release. 
+            if kind == KeyEventKind::Release {return;}
+
             if let KeyCode::Char(x) = code {
                 command.push(x);
                 queue!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
@@ -159,7 +168,7 @@ fn process_commands(command: &mut String, recording: &mut bool, file: &mut File,
                             println!("There is no recording session in progress\r");
                         }
                     } else {
-                        port.write(command.as_bytes()).expect("Write failed!");
+                        port.write(command.as_bytes()).expect("Write failed!\r");
                     }
                     command.clear();  
                 }
@@ -183,7 +192,18 @@ fn draw_commands_field(command: &mut String) {
     queue!(io::stdout(), Print(command)).unwrap();
     queue!(io::stdout(), cursor::MoveTo(0, 1)).unwrap();
     queue!(io::stdout(), Clear(ClearType::CurrentLine)).unwrap();
-    queue!(io::stdout(), Print("==========================================================================================================")).unwrap();
+    draw_wide_features("".to_string(), "=".to_string());
     queue!(io::stdout(), cursor::RestorePosition).unwrap();
     io::stdout().flush().unwrap();
+}
+
+fn draw_wide_features(mut center_message: String, padding_characters: String) -> () {
+        let width = size().unwrap().0 as usize;
+        let len = center_message.len();
+        let padding_length = (width - len) / 2;
+        let padding = padding_characters.repeat(padding_length - 1);
+        center_message = format!("{padding}{center_message}{padding}\r\n");
+        center_message.truncate(width);
+        queue!(io::stdout(), Print(center_message)).unwrap();
+        io::stdout().flush().unwrap();
 }
